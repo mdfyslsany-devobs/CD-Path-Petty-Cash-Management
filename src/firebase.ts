@@ -10,7 +10,21 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
 // Auth Helpers
-export const loginWithGoogle = () => signInWithPopup(auth, googleProvider);
+export const loginWithGoogle = async () => {
+  try {
+    return await signInWithPopup(auth, googleProvider);
+  } catch (error: any) {
+    console.error("Login Error:", error);
+    if (error.code === 'auth/unauthorized-domain') {
+      alert("This domain is not authorized for login. Please add your Vercel domain to the Firebase Console (Authentication > Settings > Authorized domains).");
+    } else if (error.code === 'auth/popup-blocked') {
+      alert("The login popup was blocked. Please allow popups for this site.");
+    } else {
+      alert("Login failed: " + error.message);
+    }
+    throw error;
+  }
+};
 export const logout = () => signOut(auth);
 
 // Error Handling Spec for Firestore Permissions
