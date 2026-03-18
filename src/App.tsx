@@ -517,7 +517,11 @@ function PettyCashApp() {
           {activeTab === 'entry' && (
             <div className="max-w-2xl mx-auto">
               <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                <ExpenseForm onSubmit={addExpense} categories={categories} />
+                <ExpenseForm 
+                  onSubmit={addExpense} 
+                  categories={categories} 
+                  onAddCategory={addCategory}
+                />
               </div>
             </div>
           )}
@@ -745,7 +749,11 @@ function StatCard({ label, value, icon, trend, highlight }: { label: string, val
   );
 }
 
-function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expense, 'id' | 'createdAt' | 'createdBy'>) => void, categories: Category[] }) {
+function ExpenseForm({ onSubmit, categories, onAddCategory }: { 
+  onSubmit: (expense: Omit<Expense, 'id' | 'createdAt' | 'createdBy'>) => void, 
+  categories: Category[],
+  onAddCategory: (name: string) => Promise<void>
+}) {
   const [formData, setFormData] = useState({
     date: format(new Date(), 'yyyy-MM-dd'),
     department: DEPARTMENTS[0],
@@ -754,10 +762,13 @@ function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expens
     description: '',
     receiptUrl: ''
   });
+  const [isAddingNewCategory, setIsAddingNewCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.amount || !formData.description) return;
+    if (!formData.amount || !formData.description || !formData.category) return;
     
     onSubmit({
       ...formData,
@@ -765,6 +776,21 @@ function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expens
       department: formData.department as Department,
       category: formData.category as Category
     });
+  };
+
+  const handleAddNewCategory = async () => {
+    if (!newCategoryName.trim()) return;
+    setIsSavingCategory(true);
+    try {
+      await onAddCategory(newCategoryName.trim());
+      setFormData({ ...formData, category: newCategoryName.trim() });
+      setNewCategoryName('');
+      setIsAddingNewCategory(false);
+    } catch (error) {
+      console.error("Error adding category:", error);
+    } finally {
+      setIsSavingCategory(false);
+    }
   };
 
   return (
@@ -789,16 +815,50 @@ function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expens
             {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         </div>
+        
         <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Category</label>
-          <select 
-            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-            value={formData.category}
-            onChange={e => setFormData({...formData, category: e.target.value})}
-          >
-            {categories.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+          <div className="flex justify-between items-center">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Category</label>
+            <button 
+              type="button"
+              onClick={() => setIsAddingNewCategory(!isAddingNewCategory)}
+              className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
+            >
+              {isAddingNewCategory ? 'Cancel' : '+ Add New'}
+            </button>
+          </div>
+          
+          {isAddingNewCategory ? (
+            <div className="flex gap-2">
+              <input 
+                type="text" 
+                placeholder="New category name..."
+                className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 text-sm"
+                value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                autoFocus
+              />
+              <button 
+                type="button"
+                onClick={handleAddNewCategory}
+                disabled={isSavingCategory || !newCategoryName.trim()}
+                className="bg-emerald-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50"
+              >
+                {isSavingCategory ? '...' : 'Save'}
+              </button>
+            </div>
+          ) : (
+            <select 
+              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              value={formData.category}
+              onChange={e => setFormData({...formData, category: e.target.value})}
+            >
+              <option value="" disabled>Select Category</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
         </div>
+
         <div className="space-y-2">
           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount (৳)</label>
           <input 
