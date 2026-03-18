@@ -83,6 +83,14 @@ function PettyCashApp() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'daily' | 'entry' | 'add-cash' | 'history' | 'sheets' | 'settings'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDept, setFilterDept] = useState<Department | 'All'>('All');
+  const [reportFilter, setReportFilter] = useState<{
+    type: 'daily' | 'monthly' | 'yearly';
+    date: string;
+  }>({
+    type: 'daily',
+    date: format(new Date(), 'yyyy-MM-dd')
+  });
+  const [editingCashIn, setEditingCashIn] = useState<CashIn | null>(null);
 
   // Auth Listener
   useEffect(() => {
@@ -161,14 +169,35 @@ function PettyCashApp() {
   const addCash = async (entry: Omit<CashIn, 'id' | 'createdAt' | 'createdBy'>) => {
     if (!user) return;
     try {
-      await addDoc(collection(db, 'cashIn'), {
-        ...entry,
-        createdAt: Date.now(),
-        createdBy: user.uid
-      });
+      if (editingCashIn) {
+        await setDoc(doc(db, 'cashIn', editingCashIn.id), {
+          ...entry,
+          createdAt: editingCashIn.createdAt,
+          createdBy: editingCashIn.createdBy,
+          updatedAt: Date.now()
+        });
+        setEditingCashIn(null);
+      } else {
+        await addDoc(collection(db, 'cashIn'), {
+          ...entry,
+          createdAt: Date.now(),
+          createdBy: user.uid
+        });
+      }
       setActiveTab('dashboard');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'cashIn');
+    }
+  };
+
+  const deleteCashIn = async (id: string) => {
+    if (!user) return;
+    if (confirm('Are you sure you want to delete this fund entry?')) {
+      try {
+        await deleteDoc(doc(db, 'cashIn', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `cashIn/${id}`);
+      }
     }
   };
 
@@ -478,11 +507,10 @@ function PettyCashApp() {
 
           {activeTab === 'daily' && (
             <DailyDashboard 
-              expenses={todayExpenses} 
-              totalCashIn={totalCashIn}
-              totalSpent={totalSpent}
-              remainingCash={remainingCash}
-              todayTotal={todayTotal}
+              expenses={expenses} 
+              cashIn={cashIn}
+              reportFilter={reportFilter}
+              setReportFilter={setReportFilter}
             />
           )}
 
@@ -495,9 +523,68 @@ function PettyCashApp() {
           )}
 
           {activeTab === 'add-cash' && (
-            <div className="max-w-2xl mx-auto">
+            <div className="max-w-4xl mx-auto space-y-8">
               <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                <CashInForm onSubmit={addCash} />
+                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
+                  <Wallet size={20} className="text-blue-600" />
+                  {editingCashIn ? 'Edit Fund Entry' : 'Add Petty Cash Fund'}
+                </h3>
+                <CashInForm 
+                  onSubmit={addCash} 
+                  initialData={editingCashIn || undefined} 
+                  onCancel={editingCashIn ? () => setEditingCashIn(null) : undefined}
+                />
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-slate-100">
+                  <h3 className="font-bold text-slate-800">Fund History</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Source</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-right">Amount</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {cashIn.map((entry) => (
+                        <tr key={entry.id} className="hover:bg-slate-50 transition-colors group">
+                          <td className="px-6 py-4 text-sm text-slate-600">
+                            {format(parseISO(entry.date), 'MMM dd, yyyy')}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-900 font-medium">
+                            {entry.source}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-bold text-blue-600 text-right">
+                            ৳{entry.amount.toLocaleString()}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button 
+                                onClick={() => setEditingCashIn(entry)}
+                                className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                                title="Edit"
+                              >
+                                <PlusCircle size={16} className="rotate-45" />
+                              </button>
+                              <button 
+                                onClick={() => deleteCashIn(entry.id)}
+                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -753,12 +840,26 @@ function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expens
   );
 }
 
-function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'createdAt' | 'createdBy'>) => void }) {
+function CashInForm({ onSubmit, initialData, onCancel }: { 
+  onSubmit: (entry: Omit<CashIn, 'id' | 'createdAt' | 'createdBy'>) => void,
+  initialData?: CashIn,
+  onCancel?: () => void
+}) {
   const [formData, setFormData] = useState({
-    date: format(new Date(), 'yyyy-MM-dd'),
-    amount: '',
-    source: ''
+    date: initialData?.date || format(new Date(), 'yyyy-MM-dd'),
+    amount: initialData?.amount.toString() || '',
+    source: initialData?.source || ''
   });
+
+  useEffect(() => {
+    if (initialData) {
+      setFormData({
+        date: initialData.date,
+        amount: initialData.amount.toString(),
+        source: initialData.source
+      });
+    }
+  }, [initialData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -772,24 +873,26 @@ function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'creat
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date</label>
-        <input 
-          type="date" 
-          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-          value={formData.date}
-          onChange={e => setFormData({...formData, date: e.target.value})}
-        />
-      </div>
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount (৳)</label>
-        <input 
-          type="number" 
-          placeholder="0.00"
-          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-          value={formData.amount}
-          onChange={e => setFormData({...formData, amount: e.target.value})}
-        />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date</label>
+          <input 
+            type="date" 
+            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+            value={formData.date}
+            onChange={e => setFormData({...formData, date: e.target.value})}
+          />
+        </div>
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount (৳)</label>
+          <input 
+            type="number" 
+            placeholder="0.00"
+            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+            value={formData.amount}
+            onChange={e => setFormData({...formData, amount: e.target.value})}
+          />
+        </div>
       </div>
       <div className="space-y-2">
         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Source of Funds</label>
@@ -801,75 +904,251 @@ function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'creat
           onChange={e => setFormData({...formData, source: e.target.value})}
         />
       </div>
-      <button 
-        type="submit"
-        className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-blue-100 flex items-center justify-center gap-2"
-      >
-        <Wallet size={20} />
-        Add to Fund
-      </button>
+      <div className="flex gap-4">
+        <button 
+          type="submit"
+          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-blue-100 flex items-center justify-center gap-2"
+        >
+          <Wallet size={20} />
+          {initialData ? 'Update Fund' : 'Add to Fund'}
+        </button>
+        {onCancel && (
+          <button 
+            type="button"
+            onClick={onCancel}
+            className="px-6 py-4 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
     </form>
   );
 }
 
-function DailyDashboard({ expenses, totalCashIn, totalSpent, remainingCash, todayTotal }: { 
+function DailyDashboard({ expenses, cashIn, reportFilter, setReportFilter }: { 
   expenses: Expense[], 
-  totalCashIn: number,
-  totalSpent: number,
-  remainingCash: number,
-  todayTotal: number
+  cashIn: CashIn[],
+  reportFilter: { type: 'daily' | 'monthly' | 'yearly', date: string },
+  setReportFilter: (f: { type: 'daily' | 'monthly' | 'yearly', date: string }) => void
 }) {
+  const [selectedDept, setSelectedDept] = useState<Department | null>(null);
+
+  const filteredExpenses = expenses.filter(e => {
+    const eDate = parseISO(e.date);
+    const filterDate = parseISO(reportFilter.date);
+    if (reportFilter.type === 'daily') return isSameDay(eDate, filterDate);
+    if (reportFilter.type === 'monthly') return format(eDate, 'yyyy-MM') === format(filterDate, 'yyyy-MM');
+    if (reportFilter.type === 'yearly') return format(eDate, 'yyyy') === format(filterDate, 'yyyy');
+    return false;
+  });
+
+  const filteredCashIn = cashIn.filter(c => {
+    const cDate = parseISO(c.date);
+    const filterDate = parseISO(reportFilter.date);
+    if (reportFilter.type === 'daily') return isSameDay(cDate, filterDate);
+    if (reportFilter.type === 'monthly') return format(cDate, 'yyyy-MM') === format(filterDate, 'yyyy-MM');
+    if (reportFilter.type === 'yearly') return format(cDate, 'yyyy') === format(filterDate, 'yyyy');
+    return false;
+  });
+
+  const totalFund = cashIn.reduce((sum, c) => sum + c.amount, 0);
+  const totalExpense = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const remainingBalance = totalFund - totalExpense;
+  const periodExpense = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
+
   const handlePrint = () => {
     window.print();
   };
 
   return (
     <div className="space-y-6 print:p-0">
-      <div className="flex justify-between items-center print:hidden">
-        <h3 className="font-bold text-slate-800">Today's Summary</h3>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 print:hidden bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-2">
+          <select 
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium focus:outline-none"
+            value={reportFilter.type}
+            onChange={(e) => setReportFilter({ ...reportFilter, type: e.target.value as any })}
+          >
+            <option value="daily">Daily Report</option>
+            <option value="monthly">Monthly Report</option>
+            <option value="yearly">Yearly Report</option>
+          </select>
+          <input 
+            type={reportFilter.type === 'daily' ? 'date' : reportFilter.type === 'monthly' ? 'month' : 'number'}
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium focus:outline-none"
+            value={reportFilter.type === 'yearly' ? reportFilter.date.substring(0, 4) : reportFilter.date}
+            onChange={(e) => {
+              let val = e.target.value;
+              if (reportFilter.type === 'yearly') val = `${val}-01-01`;
+              if (reportFilter.type === 'monthly') val = `${val}-01`;
+              setReportFilter({ ...reportFilter, date: val });
+            }}
+            placeholder={reportFilter.type === 'yearly' ? 'YYYY' : ''}
+          />
+        </div>
         <button 
           onClick={handlePrint}
           className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-all"
         >
           <Printer size={18} />
-          Print Daily Report
+          Print Report
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center">
-          <p className="text-slate-500 text-xs font-medium mb-1 uppercase tracking-wider">Total Fund</p>
-          <h4 className="text-2xl font-bold text-slate-900">৳{totalCashIn.toLocaleString()}</h4>
+          <p className="text-slate-500 text-[10px] font-bold mb-1 uppercase tracking-wider">Total Fund (Overall)</p>
+          <h4 className="text-xl font-bold text-slate-900">৳{totalFund.toLocaleString()}</h4>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center">
-          <p className="text-slate-500 text-xs font-medium mb-1 uppercase tracking-wider">Today's Expense</p>
-          <h4 className="text-2xl font-bold text-red-600">৳{todayTotal.toLocaleString()}</h4>
+          <p className="text-slate-500 text-[10px] font-bold mb-1 uppercase tracking-wider">Total Expense (Overall)</p>
+          <h4 className="text-xl font-bold text-red-600">৳{totalExpense.toLocaleString()}</h4>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center">
-          <p className="text-slate-500 text-xs font-medium mb-1 uppercase tracking-wider">Remaining Balance</p>
-          <h4 className="text-2xl font-bold text-emerald-600">৳{remainingCash.toLocaleString()}</h4>
+          <p className="text-slate-500 text-[10px] font-bold mb-1 uppercase tracking-wider">Remaining Balance</p>
+          <h4 className="text-xl font-bold text-emerald-600">৳{remainingBalance.toLocaleString()}</h4>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center bg-emerald-50/30">
+          <p className="text-slate-500 text-[10px] font-bold mb-1 uppercase tracking-wider">
+            {reportFilter.type === 'daily' ? "Today's" : reportFilter.type === 'monthly' ? "This Month's" : "This Year's"} Expense
+          </p>
+          <h4 className="text-xl font-bold text-blue-600">৳{periodExpense.toLocaleString()}</h4>
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-        <h4 className="font-bold text-slate-800 mb-6 border-b pb-4">Department-wise Expense (Today)</h4>
-        <div className="space-y-4">
-          {DEPARTMENTS.map(dept => {
-            const amount = expenses.filter(e => e.department === dept).reduce((sum, e) => sum + e.amount, 0);
-            return (
-              <div key={dept} className="flex justify-between items-center">
-                <span className="text-sm text-slate-600">{dept}</span>
-                <span className="font-bold text-slate-900">৳{amount.toLocaleString()}</span>
-              </div>
-            );
-          })}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+          <h4 className="font-bold text-slate-800 mb-6 border-b pb-4 flex justify-between items-center">
+            <span>Department-wise Breakdown</span>
+            <span className="text-[10px] text-slate-400 uppercase tracking-widest">Click for details</span>
+          </h4>
+          <div className="space-y-3">
+            {DEPARTMENTS.map(dept => {
+              const amount = filteredExpenses.filter(e => e.department === dept).reduce((sum, e) => sum + e.amount, 0);
+              return (
+                <button 
+                  key={dept} 
+                  onClick={() => setSelectedDept(selectedDept === dept ? null : dept)}
+                  className={cn(
+                    "w-full flex justify-between items-center p-3 rounded-xl transition-all border",
+                    selectedDept === dept ? "bg-emerald-50 border-emerald-200 shadow-sm" : "bg-slate-50 border-transparent hover:border-slate-200"
+                  )}
+                >
+                  <span className="text-sm font-medium text-slate-700">{dept}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="font-bold text-slate-900">৳{amount.toLocaleString()}</span>
+                    <ChevronRight size={16} className={cn("text-slate-400 transition-transform", selectedDept === dept && "rotate-90")} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+          <h4 className="font-bold text-slate-800 mb-6 border-b pb-4">
+            {selectedDept ? `${selectedDept} Details` : "Expense Purpose Summary"}
+          </h4>
+          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+            {(selectedDept ? filteredExpenses.filter(e => e.department === selectedDept) : filteredExpenses).length > 0 ? (
+              (selectedDept ? filteredExpenses.filter(e => e.department === selectedDept) : filteredExpenses).map(e => (
+                <div key={e.id} className="flex justify-between items-start py-3 border-b border-slate-50 last:border-0">
+                  <div className="flex-1">
+                    <p className="text-sm font-bold text-slate-900">{e.description}</p>
+                    <p className="text-[10px] text-slate-400 uppercase font-bold">
+                      {format(parseISO(e.date), 'MMM dd')} • {e.department} • {e.category}
+                    </p>
+                  </div>
+                  <p className="font-bold text-slate-900 ml-4">৳{e.amount.toLocaleString()}</p>
+                </div>
+              ))
+            ) : (
+              <p className="text-center text-slate-400 italic text-sm py-8">No transactions found for this selection.</p>
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-        <h4 className="font-bold text-slate-800 mb-6 border-b pb-4">Today's Transactions</h4>
+      {/* Print Only Section */}
+      <div className="hidden print:block mt-8">
+        <h3 className="text-xl font-bold text-center mb-8 uppercase tracking-widest underline underline-offset-8">
+          Petty Cash {reportFilter.type.toUpperCase()} Report
+        </h3>
+        <div className="grid grid-cols-2 gap-8 mb-12">
+          <div className="space-y-2">
+            <div className="flex justify-between border-b border-slate-200 py-1">
+              <span className="text-xs font-bold">Report Type:</span>
+              <span className="text-xs">{reportFilter.type.toUpperCase()}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-200 py-1">
+              <span className="text-xs font-bold">Period:</span>
+              <span className="text-xs">
+                {reportFilter.type === 'daily' && format(parseISO(reportFilter.date), 'MMMM dd, yyyy')}
+                {reportFilter.type === 'monthly' && format(parseISO(reportFilter.date), 'MMMM yyyy')}
+                {reportFilter.type === 'yearly' && format(parseISO(reportFilter.date), 'yyyy')}
+              </span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex justify-between border-b border-slate-200 py-1">
+              <span className="text-xs font-bold">Total Period Expense:</span>
+              <span className="text-xs font-bold">৳{periodExpense.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-200 py-1">
+              <span className="text-xs font-bold">Remaining Balance:</span>
+              <span className="text-xs font-bold">৳{remainingBalance.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+
+        <table className="w-full text-left border-collapse border border-slate-300 mb-12">
+          <thead>
+            <tr className="bg-slate-100">
+              <th className="border border-slate-300 px-4 py-2 text-xs font-bold">Department</th>
+              <th className="border border-slate-300 px-4 py-2 text-xs font-bold text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {DEPARTMENTS.map(dept => {
+              const amount = filteredExpenses.filter(e => e.department === dept).reduce((sum, e) => sum + e.amount, 0);
+              return (
+                <tr key={dept}>
+                  <td className="border border-slate-300 px-4 py-2 text-xs">{dept}</td>
+                  <td className="border border-slate-300 px-4 py-2 text-xs text-right font-bold">৳{amount.toLocaleString()}</td>
+                </tr>
+              );
+            })}
+            <tr className="bg-slate-50 font-bold">
+              <td className="border border-slate-300 px-4 py-2 text-xs">TOTAL PERIOD EXPENSE</td>
+              <td className="border border-slate-300 px-4 py-2 text-xs text-right">৳{periodExpense.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div className="mt-20 pt-10 border-t border-slate-200">
+          <div className="flex justify-between">
+            <div className="text-center">
+              <div className="w-48 border-b border-slate-900 mb-2"></div>
+              <p className="text-[10px] font-bold uppercase">Prepared By</p>
+            </div>
+            <div className="text-center">
+              <div className="w-48 border-b border-slate-900 mb-2"></div>
+              <p className="text-[10px] font-bold uppercase">Accounts Officer</p>
+            </div>
+            <div className="text-center">
+              <div className="w-48 border-b border-slate-900 mb-2"></div>
+              <p className="text-[10px] font-bold uppercase">Managing Director</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hide transactions in print by not including them in a print-visible container or using print:hidden */}
+      <div className="print:hidden bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+        <h4 className="font-bold text-slate-800 mb-6 border-b pb-4">Period Transactions (Screen Only)</h4>
         <div className="space-y-4">
-          {expenses.length > 0 ? expenses.map(e => (
+          {filteredExpenses.length > 0 ? filteredExpenses.map(e => (
             <div key={e.id} className="flex justify-between items-start py-3 border-b border-slate-50 last:border-0">
               <div>
                 <p className="text-sm font-bold text-slate-900">{e.description}</p>
@@ -878,25 +1157,8 @@ function DailyDashboard({ expenses, totalCashIn, totalSpent, remainingCash, toda
               <p className="font-bold text-slate-900">৳{e.amount.toLocaleString()}</p>
             </div>
           )) : (
-            <p className="text-center text-slate-400 italic text-sm py-4">No expenses recorded today.</p>
+            <p className="text-center text-slate-400 italic text-sm py-4">No expenses recorded for this period.</p>
           )}
-        </div>
-      </div>
-
-      <div className="hidden print:block mt-20 pt-10 border-t border-slate-200">
-        <div className="flex justify-between">
-          <div className="text-center">
-            <div className="w-48 border-b border-slate-900 mb-2"></div>
-            <p className="text-xs font-bold">Prepared By</p>
-          </div>
-          <div className="text-center">
-            <div className="w-48 border-b border-slate-900 mb-2"></div>
-            <p className="text-xs font-bold">Accounts Officer</p>
-          </div>
-          <div className="text-center">
-            <div className="w-48 border-b border-slate-900 mb-2"></div>
-            <p className="text-xs font-bold">Managing Director</p>
-          </div>
         </div>
       </div>
     </div>
