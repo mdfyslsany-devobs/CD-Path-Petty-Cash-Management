@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import * as React from 'react';
+import { useState, useEffect, Component, type ErrorInfo, type ReactNode } from 'react';
 import { 
   LayoutDashboard, 
   PlusCircle, 
@@ -14,7 +15,11 @@ import {
   Download,
   Trash2,
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  LogOut,
+  LogIn,
+  AlertCircle,
+  Printer
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -32,13 +37,46 @@ import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isSameDay
 import { DEPARTMENTS, DEFAULT_CATEGORIES, type Expense, type Department, type Category, type CashIn } from './types';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { 
+  auth, 
+  db, 
+  loginWithGoogle, 
+  logout, 
+  handleFirestoreError, 
+  OperationType 
+} from './firebase';
+import { 
+  onAuthStateChanged, 
+  type User 
+} from 'firebase/auth';
+import { 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  deleteDoc, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs,
+  query, 
+  orderBy 
+} from 'firebase/firestore';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+
 export default function App() {
+  return (
+    <PettyCashApp />
+  );
+}
+
+function PettyCashApp() {
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [cashIn, setCashIn] = useState<CashIn[]>([]);
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
@@ -46,72 +84,170 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDept, setFilterDept] = useState<Department | 'All'>('All');
 
-  // Load data from localStorage
+  // Auth Listener
   useEffect(() => {
-    const savedExpenses = localStorage.getItem('cd_petty_cash_data');
-    const savedCashIn = localStorage.getItem('cd_petty_cash_in');
-    const savedCategories = localStorage.getItem('cd_petty_cash_categories');
-    if (savedExpenses) {
-      try {
-        setExpenses(JSON.parse(savedExpenses));
-      } catch (e) {
-        console.error('Failed to parse saved expenses', e);
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+
+      if (currentUser) {
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userDocRef);
+        if (!userDoc.exists()) {
+          await setDoc(userDocRef, {
+            email: currentUser.email,
+            displayName: currentUser.displayName,
+            role: currentUser.email === 'mdfyslsany@gmail.com' ? 'admin' : 'accounts_officer',
+            createdAt: Date.now()
+          });
+        }
       }
-    }
-    if (savedCashIn) {
-      try {
-        setCashIn(JSON.parse(savedCashIn));
-      } catch (e) {
-        console.error('Failed to parse saved cash in', e);
-      }
-    }
-    if (savedCategories) {
-      try {
-        setCategories(JSON.parse(savedCategories));
-      } catch (e) {
-        console.error('Failed to parse saved categories', e);
-      }
-    }
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Save data to localStorage
+  // Firestore Listeners
   useEffect(() => {
-    localStorage.setItem('cd_petty_cash_data', JSON.stringify(expenses));
-  }, [expenses]);
+    if (!user || !isAuthReady) {
+      setExpenses([]);
+      setCashIn([]);
+      setCategories(DEFAULT_CATEGORIES);
+      return;
+    }
 
-  useEffect(() => {
-    localStorage.setItem('cd_petty_cash_in', JSON.stringify(cashIn));
-  }, [cashIn]);
+    const qExpenses = query(collection(db, 'expenses'), orderBy('createdAt', 'desc'));
+    const unsubExpenses = onSnapshot(qExpenses, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      setExpenses(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'expenses'));
 
-  useEffect(() => {
-    localStorage.setItem('cd_petty_cash_categories', JSON.stringify(categories));
-  }, [categories]);
+    const qCashIn = query(collection(db, 'cashIn'), orderBy('createdAt', 'desc'));
+    const unsubCashIn = onSnapshot(qCashIn, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CashIn));
+      setCashIn(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'cashIn'));
 
-  const addExpense = (expense: Omit<Expense, 'id' | 'createdAt'>) => {
-    const newExpense: Expense = {
-      ...expense,
-      id: crypto.randomUUID(),
-      createdAt: Date.now()
+    const qCategories = query(collection(db, 'categories'), orderBy('createdAt', 'asc'));
+    const unsubCategories = onSnapshot(qCategories, (snapshot) => {
+      const data = snapshot.docs.map(doc => doc.data().name as string);
+      if (data.length > 0) {
+        setCategories(data);
+      } else {
+        setCategories(DEFAULT_CATEGORIES);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'categories'));
+
+    return () => {
+      unsubExpenses();
+      unsubCashIn();
+      unsubCategories();
     };
-    setExpenses([newExpense, ...expenses]);
-    setActiveTab('history');
-  };
+  }, [user, isAuthReady]);
 
-  const addCash = (entry: Omit<CashIn, 'id' | 'createdAt'>) => {
-    const newEntry: CashIn = {
-      ...entry,
-      id: crypto.randomUUID(),
-      createdAt: Date.now()
-    };
-    setCashIn([newEntry, ...cashIn]);
-    setActiveTab('dashboard');
-  };
-
-  const deleteExpense = (id: string) => {
-    if (confirm('Are you sure you want to delete this entry?')) {
-      setExpenses(expenses.filter(e => e.id !== id));
+  const addExpense = async (expense: Omit<Expense, 'id' | 'createdAt' | 'createdBy'>) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'expenses'), {
+        ...expense,
+        createdAt: Date.now(),
+        createdBy: user.uid
+      });
+      setActiveTab('history');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'expenses');
     }
   };
+
+  const addCash = async (entry: Omit<CashIn, 'id' | 'createdAt' | 'createdBy'>) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'cashIn'), {
+        ...entry,
+        createdAt: Date.now(),
+        createdBy: user.uid
+      });
+      setActiveTab('dashboard');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'cashIn');
+    }
+  };
+
+  const deleteExpense = async (id: string) => {
+    if (!user) return;
+    if (confirm('Are you sure you want to delete this entry?')) {
+      try {
+        await deleteDoc(doc(db, 'expenses', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `expenses/${id}`);
+      }
+    }
+  };
+
+  const addCategory = async (name: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'categories'), {
+        name,
+        createdAt: Date.now()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'categories');
+    }
+  };
+
+  const deleteCategory = async (name: string) => {
+    if (!user) return;
+    try {
+      const snap = await getDocs(collection(db, 'categories'));
+      const target = snap.docs.find(d => d.data().name === name);
+      if (target) {
+        await deleteDoc(doc(db, 'categories', target.id));
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'categories');
+    }
+  };
+
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="animate-pulse flex flex-col items-center gap-4">
+          <div className="w-12 h-12 bg-emerald-600 rounded-xl"></div>
+          <p className="text-slate-400 text-sm font-medium">Initializing Hospital System...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] p-4">
+        <div className="max-w-md w-full">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-emerald-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-4 shadow-xl shadow-emerald-200">
+              <Hospital size={32} />
+            </div>
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">CD PATH & HOSPITAL</h1>
+            <p className="text-slate-500 mt-2">Petty Cash Management System</p>
+          </div>
+          
+          <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xl">
+            <h2 className="text-xl font-bold text-slate-800 mb-6 text-center">Staff Login</h2>
+            <button 
+              onClick={loginWithGoogle}
+              className="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 py-3.5 rounded-2xl font-semibold text-slate-700 hover:bg-slate-50 transition-all active:scale-[0.98] shadow-sm"
+            >
+              <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
+              Continue with Google
+            </button>
+            <p className="text-[10px] text-slate-400 text-center mt-6 uppercase tracking-widest font-bold">
+              Authorized Personnel Only
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Calculations
   const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
@@ -121,15 +257,6 @@ export default function App() {
   const today = new Date();
   const todayExpenses = expenses.filter(e => isSameDay(parseISO(e.date), today));
   const todayTotal = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
-
-  const currentMonthExpenses = expenses.filter(e => {
-    const date = parseISO(e.date);
-    return isWithinInterval(date, {
-      start: startOfMonth(new Date()),
-      end: endOfMonth(new Date())
-    });
-  });
-  const monthlyTotal = currentMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
 
   const deptData = DEPARTMENTS.map(dept => ({
     name: dept,
@@ -206,18 +333,25 @@ export default function App() {
         </nav>
 
         <div className="p-6 border-t border-slate-100">
-          <div className="bg-emerald-50 rounded-xl p-4">
-            <p className="text-xs font-medium text-emerald-800 mb-1">Eco-Friendly Tip</p>
-            <p className="text-[10px] text-emerald-600 leading-relaxed">
-              Always upload a digital voucher to keep our hospital 100% paperless.
-            </p>
+          <div className="flex items-center gap-3 mb-4 px-2">
+            <img src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} className="w-8 h-8 rounded-full border border-slate-200" alt="User" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-slate-900 truncate">{user.displayName}</p>
+              <p className="text-[10px] text-slate-500 truncate">{user.email}</p>
+            </div>
           </div>
+          <button 
+            onClick={logout}
+            className="w-full flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50 rounded-xl text-xs font-bold transition-all"
+          >
+            <LogOut size={16} />
+            Sign Out
+          </button>
         </div>
       </aside>
 
       {/* Main Content */}
       <main className="md:ml-64 p-4 md:p-8">
-        {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">
@@ -244,11 +378,9 @@ export default function App() {
           </div>
         </header>
 
-        {/* Tab Content */}
         <div className="space-y-6">
           {activeTab === 'dashboard' && (
             <div className="space-y-6">
-              {/* Stats Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <StatCard 
                   label="Total Cash In" 
@@ -277,7 +409,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Charts */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                   <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
@@ -414,7 +545,7 @@ export default function App() {
                       {expenses
                         .filter(e => {
                           const matchesSearch = e.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                                              e.category.toLowerCase().includes(searchTerm.toLowerCase());
+                                               e.category.toLowerCase().includes(searchTerm.toLowerCase());
                           const matchesDept = filterDept === 'All' || e.department === filterDept;
                           return matchesSearch && matchesDept;
                         })
@@ -480,8 +611,8 @@ export default function App() {
           {activeTab === 'settings' && (
             <CategorySettings 
               categories={categories} 
-              onAdd={(cat) => setCategories([...categories, cat])}
-              onDelete={(cat) => setCategories(categories.filter(c => c !== cat))}
+              onAdd={addCategory}
+              onDelete={deleteCategory}
             />
           )}
         </div>
@@ -527,7 +658,7 @@ function StatCard({ label, value, icon, trend, highlight }: { label: string, val
   );
 }
 
-function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expense, 'id' | 'createdAt'>) => void, categories: Category[] }) {
+function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expense, 'id' | 'createdAt' | 'createdBy'>) => void, categories: Category[] }) {
   const [formData, setFormData] = useState({
     date: format(new Date(), 'yyyy-MM-dd'),
     department: DEPARTMENTS[0],
@@ -556,32 +687,17 @@ function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expens
           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date</label>
           <input 
             type="date" 
-            required
             className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             value={formData.date}
             onChange={e => setFormData({...formData, date: e.target.value})}
           />
         </div>
         <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount (৳)</label>
-          <input 
-            type="number" 
-            required
-            placeholder="0.00"
-            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-            value={formData.amount}
-            onChange={e => setFormData({...formData, amount: e.target.value})}
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-2">
           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Department</label>
           <select 
             className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             value={formData.department}
-            onChange={e => setFormData({...formData, department: e.target.value as any})}
+            onChange={e => setFormData({...formData, department: e.target.value as Department})}
           >
             {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
@@ -596,77 +712,10 @@ function ExpenseForm({ onSubmit, categories }: { onSubmit: (expense: Omit<Expens
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Description</label>
-        <textarea 
-          required
-          placeholder="What was this expense for? (e.g., 2 Light Bulbs for ICU)"
-          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 min-h-[100px]"
-          value={formData.description}
-          onChange={e => setFormData({...formData, description: e.target.value})}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Digital Receipt Link (Optional)</label>
-        <div className="relative">
-          <Download className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-          <input 
-            type="url" 
-            placeholder="Paste Google Drive or Photo link here"
-            className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-            value={formData.receiptUrl}
-            onChange={e => setFormData({...formData, receiptUrl: e.target.value})}
-          />
-        </div>
-      </div>
-
-      <button 
-        type="submit"
-        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-[0.98]"
-      >
-        Save Expense Entry
-      </button>
-    </form>
-  );
-}
-
-function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'createdAt'>) => void }) {
-  const [formData, setFormData] = useState({
-    date: format(new Date(), 'yyyy-MM-dd'),
-    amount: '',
-    source: 'Hospital Fund'
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.amount) return;
-    onSubmit({
-      ...formData,
-      amount: parseFloat(formData.amount)
-    });
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date</label>
-          <input 
-            type="date" 
-            required
-            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-            value={formData.date}
-            onChange={e => setFormData({...formData, date: e.target.value})}
-          />
-        </div>
         <div className="space-y-2">
           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount (৳)</label>
           <input 
             type="number" 
-            required
             placeholder="0.00"
             className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             value={formData.amount}
@@ -675,11 +724,78 @@ function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'creat
         </div>
       </div>
       <div className="space-y-2">
-        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Source / Reference</label>
+        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Description / Purpose</label>
+        <textarea 
+          placeholder="What was this expense for?"
+          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 h-24"
+          value={formData.description}
+          onChange={e => setFormData({...formData, description: e.target.value})}
+        />
+      </div>
+      <div className="space-y-2">
+        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Digital Voucher URL (Optional)</label>
+        <input 
+          type="url" 
+          placeholder="https://..."
+          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+          value={formData.receiptUrl}
+          onChange={e => setFormData({...formData, receiptUrl: e.target.value})}
+        />
+      </div>
+      <button 
+        type="submit"
+        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-emerald-100 flex items-center justify-center gap-2"
+      >
+        <PlusCircle size={20} />
+        Record Transaction
+      </button>
+    </form>
+  );
+}
+
+function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'createdAt' | 'createdBy'>) => void }) {
+  const [formData, setFormData] = useState({
+    date: format(new Date(), 'yyyy-MM-dd'),
+    amount: '',
+    source: ''
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.amount || !formData.source) return;
+    
+    onSubmit({
+      ...formData,
+      amount: parseFloat(formData.amount)
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="space-y-2">
+        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Date</label>
+        <input 
+          type="date" 
+          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+          value={formData.date}
+          onChange={e => setFormData({...formData, date: e.target.value})}
+        />
+      </div>
+      <div className="space-y-2">
+        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount (৳)</label>
+        <input 
+          type="number" 
+          placeholder="0.00"
+          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+          value={formData.amount}
+          onChange={e => setFormData({...formData, amount: e.target.value})}
+        />
+      </div>
+      <div className="space-y-2">
+        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Source of Funds</label>
         <input 
           type="text" 
-          required
-          placeholder="e.g., Main Accounts, Hospital Fund"
+          placeholder="e.g., Main Accounts, Bank Withdrawal"
           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
           value={formData.source}
           onChange={e => setFormData({...formData, source: e.target.value})}
@@ -687,9 +803,10 @@ function CashInForm({ onSubmit }: { onSubmit: (entry: Omit<CashIn, 'id' | 'creat
       </div>
       <button 
         type="submit"
-        className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 transition-all active:scale-[0.98]"
+        className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-blue-100 flex items-center justify-center gap-2"
       >
-        Add to Petty Cash Fund
+        <Wallet size={20} />
+        Add to Fund
       </button>
     </form>
   );
@@ -706,89 +823,79 @@ function DailyDashboard({ expenses, totalCashIn, totalSpent, remainingCash, toda
     window.print();
   };
 
-  const deptSpending = DEPARTMENTS.map(dept => ({
-    name: dept,
-    amount: expenses.filter(e => e.department === dept).reduce((sum, e) => sum + e.amount, 0)
-  })).filter(d => d.amount > 0);
-
   return (
     <div className="space-y-6 print:p-0">
       <div className="flex justify-between items-center print:hidden">
-        <h3 className="text-lg font-bold text-slate-800">Daily Summary: {format(new Date(), 'MMM dd, yyyy')}</h3>
+        <h3 className="font-bold text-slate-800">Today's Summary</h3>
         <button 
           onClick={handlePrint}
           className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-all"
         >
-          <Download size={16} />
+          <Printer size={18} />
           Print Daily Report
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:grid-cols-3 print:gap-4">
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm print:border-slate-300">
-          <p className="text-slate-500 text-xs font-medium mb-1">Total Fund (Cash In)</p>
-          <h4 className="text-xl font-bold text-slate-900">৳{totalCashIn.toLocaleString()}</h4>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center">
+          <p className="text-slate-500 text-xs font-medium mb-1 uppercase tracking-wider">Total Fund</p>
+          <h4 className="text-2xl font-bold text-slate-900">৳{totalCashIn.toLocaleString()}</h4>
         </div>
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm print:border-slate-300">
-          <p className="text-slate-500 text-xs font-medium mb-1">Today's Total Expense</p>
-          <h4 className="text-xl font-bold text-red-600">৳{todayTotal.toLocaleString()}</h4>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center">
+          <p className="text-slate-500 text-xs font-medium mb-1 uppercase tracking-wider">Today's Expense</p>
+          <h4 className="text-2xl font-bold text-red-600">৳{todayTotal.toLocaleString()}</h4>
         </div>
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm print:border-slate-300">
-          <p className="text-slate-500 text-xs font-medium mb-1">Remaining Balance</p>
-          <h4 className="text-xl font-bold text-emerald-600">৳{remainingCash.toLocaleString()}</h4>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm text-center">
+          <p className="text-slate-500 text-xs font-medium mb-1 uppercase tracking-wider">Remaining Balance</p>
+          <h4 className="text-2xl font-bold text-emerald-600">৳{remainingCash.toLocaleString()}</h4>
         </div>
       </div>
 
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm print:border-slate-300">
-        <h4 className="font-bold text-slate-800 mb-4">Department-wise Expense (Today)</h4>
-        <div className="space-y-3">
-          {deptSpending.length > 0 ? deptSpending.map(dept => (
-            <div key={dept.name} className="flex justify-between items-center py-2 border-b border-slate-50 last:border-0">
-              <span className="text-sm text-slate-600">{dept.name}</span>
-              <span className="text-sm font-bold text-slate-900">৳{dept.amount.toLocaleString()}</span>
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+        <h4 className="font-bold text-slate-800 mb-6 border-b pb-4">Department-wise Expense (Today)</h4>
+        <div className="space-y-4">
+          {DEPARTMENTS.map(dept => {
+            const amount = expenses.filter(e => e.department === dept).reduce((sum, e) => sum + e.amount, 0);
+            return (
+              <div key={dept} className="flex justify-between items-center">
+                <span className="text-sm text-slate-600">{dept}</span>
+                <span className="font-bold text-slate-900">৳{amount.toLocaleString()}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+        <h4 className="font-bold text-slate-800 mb-6 border-b pb-4">Today's Transactions</h4>
+        <div className="space-y-4">
+          {expenses.length > 0 ? expenses.map(e => (
+            <div key={e.id} className="flex justify-between items-start py-3 border-b border-slate-50 last:border-0">
+              <div>
+                <p className="text-sm font-bold text-slate-900">{e.description}</p>
+                <p className="text-[10px] text-slate-400 uppercase font-bold">{e.department} • {e.category}</p>
+              </div>
+              <p className="font-bold text-slate-900">৳{e.amount.toLocaleString()}</p>
             </div>
           )) : (
-            <p className="text-sm text-slate-400 italic">No expenses recorded today.</p>
+            <p className="text-center text-slate-400 italic text-sm py-4">No expenses recorded today.</p>
           )}
         </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden print:border-slate-300">
-        <h4 className="font-bold text-slate-800 p-6 border-b border-slate-100">Detailed Transaction List (Today)</h4>
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="px-6 py-3 text-[10px] font-bold text-slate-400 uppercase">Dept</th>
-              <th className="px-6 py-3 text-[10px] font-bold text-slate-400 uppercase">Description</th>
-              <th className="px-6 py-3 text-[10px] font-bold text-slate-400 uppercase text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {expenses.map(e => (
-              <tr key={e.id}>
-                <td className="px-6 py-3 text-xs font-bold text-slate-600 uppercase">{e.department}</td>
-                <td className="px-6 py-3 text-xs text-slate-900">{e.description}</td>
-                <td className="px-6 py-3 text-xs font-bold text-slate-900 text-right">৳{e.amount.toLocaleString()}</td>
-              </tr>
-            ))}
-            {expenses.length === 0 && (
-              <tr>
-                <td colSpan={3} className="px-6 py-8 text-center text-slate-400 italic text-xs">No transactions today.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
       </div>
 
       <div className="hidden print:block mt-20 pt-10 border-t border-slate-200">
         <div className="flex justify-between">
           <div className="text-center">
-            <div className="w-40 border-b border-slate-900 mb-2"></div>
-            <p className="text-[10px] font-bold uppercase">Prepared By</p>
+            <div className="w-48 border-b border-slate-900 mb-2"></div>
+            <p className="text-xs font-bold">Prepared By</p>
           </div>
           <div className="text-center">
-            <div className="w-40 border-b border-slate-900 mb-2"></div>
-            <p className="text-[10px] font-bold uppercase">Authorized By</p>
+            <div className="w-48 border-b border-slate-900 mb-2"></div>
+            <p className="text-xs font-bold">Accounts Officer</p>
+          </div>
+          <div className="text-center">
+            <div className="w-48 border-b border-slate-900 mb-2"></div>
+            <p className="text-xs font-bold">Managing Director</p>
           </div>
         </div>
       </div>
@@ -859,73 +966,36 @@ function SheetsGuide() {
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-        <h3 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
-          <FileSpreadsheet className="text-emerald-600" />
-          Google Sheets Setup Guide
-        </h3>
-        <p className="text-slate-600 mb-6">
-          Follow these steps to replicate this system in Google Sheets for backup or alternative tracking.
-        </p>
-
+        <h3 className="text-xl font-bold text-slate-900 mb-4">Google Sheets Structure</h3>
+        <p className="text-slate-600 mb-6">If you prefer to maintain a backup or mirror in Google Sheets, follow this structure:</p>
+        
         <div className="space-y-6">
-          <section>
-            <h4 className="font-bold text-slate-800 mb-2">1. Main Data Sheet (Name it: "Expenses")</h4>
-            <p className="text-sm text-slate-500 mb-3">Create these headers in Row 1:</p>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {['Date', 'Dept', 'Category', 'Description', 'Amount', 'Receipt URL'].map(h => (
-                <div key={h} className="bg-slate-50 border border-slate-200 p-2 text-center rounded text-[10px] font-bold text-slate-600">{h}</div>
+          <div className="bg-slate-50 p-6 rounded-xl border border-slate-100">
+            <h4 className="font-bold text-slate-800 mb-3">1. Main Data Sheet (Expenses)</h4>
+            <p className="text-xs text-slate-500 mb-4">Columns required:</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {['Date', 'Department', 'Category', 'Amount', 'Description', 'Receipt URL'].map(col => (
+                <div key={col} className="bg-white px-3 py-2 rounded border border-slate-200 text-xs font-bold text-center">{col}</div>
               ))}
             </div>
-          </section>
+          </div>
 
-          <section>
-            <h4 className="font-bold text-slate-800 mb-2">2. Automated Formulas</h4>
+          <div className="bg-slate-50 p-6 rounded-xl border border-slate-100">
+            <h4 className="font-bold text-slate-800 mb-3">2. Automated Formulas</h4>
             <div className="space-y-4">
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Department-wise Summary</p>
-                <code className="text-xs text-emerald-700 block bg-white p-3 rounded border border-slate-100">
-                  =SUMIF(Expenses!B:B, "Pathology", Expenses!E:E)
+              <div>
+                <p className="text-xs font-bold text-slate-700 mb-1">Department Summary:</p>
+                <code className="block bg-slate-900 text-emerald-400 p-3 rounded text-xs overflow-x-auto">
+                  =SUMIF(B:B, "Pathology", D:D)
                 </code>
-                <p className="text-[10px] text-slate-500 mt-2">Replace "Pathology" with other department names to get their totals.</p>
               </div>
-
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Month-wise Summary (Current Month)</p>
-                <code className="text-xs text-emerald-700 block bg-white p-3 rounded border border-slate-100">
-                  =SUMIFS(Expenses!E:E, Expenses!A:A, "&gt;="&amp;EOMONTH(TODAY(),-1)+1, Expenses!A:A, "&lt;="&amp;EOMONTH(TODAY(),0))
-                </code>
+              <div>
+                <p className="text-xs font-bold text-slate-700 mb-1">Monthly Summary (Pivot Table):</p>
+                <p className="text-xs text-slate-500">Insert {'>'} Pivot Table {'>'} Rows: Date (Grouped by Month), Columns: Department, Values: Amount (SUM).</p>
               </div>
             </div>
-          </section>
-
-          <section>
-            <h4 className="font-bold text-slate-800 mb-2">3. Digital Receipt Tip</h4>
-            <p className="text-sm text-slate-600 leading-relaxed">
-              In the "Receipt URL" column, use the <code className="bg-slate-100 px-1 rounded text-emerald-700">=HYPERLINK("url", "View Voucher")</code> formula to keep the sheet clean while maintaining paperless records.
-            </p>
-          </section>
+          </div>
         </div>
-      </div>
-
-      <div className="bg-emerald-900 text-white p-8 rounded-2xl shadow-xl">
-        <h3 className="text-xl font-bold mb-4">Smart Apps Script (Advanced)</h3>
-        <p className="text-emerald-100 text-sm mb-6">
-          Paste this code into Extensions &gt; Apps Script to create a custom menu in your Google Sheet.
-        </p>
-        <pre className="bg-emerald-950 p-4 rounded-xl text-[10px] overflow-x-auto text-emerald-300 border border-emerald-800">
-{`function onOpen() {
-  var ui = SpreadsheetApp.getUi();
-  ui.createMenu('🏥 CD Hospital Admin')
-      .addItem('Add New Expense', 'showForm')
-      .addItem('Generate Monthly Report', 'generateReport')
-      .addToUi();
-}
-
-function generateReport() {
-  SpreadsheetApp.getUi().alert('Generating detailed PDF report for all departments...');
-  // Logic to filter and export to PDF
-}`}
-        </pre>
       </div>
     </div>
   );
@@ -933,8 +1003,8 @@ function generateReport() {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="h-full w-full flex flex-col items-center justify-center text-slate-400">
-      <History size={48} strokeWidth={1} className="mb-2 opacity-20" />
+    <div className="flex flex-col items-center justify-center h-full text-slate-400">
+      <AlertCircle size={40} className="mb-2 opacity-20" />
       <p className="text-sm italic">{message}</p>
     </div>
   );

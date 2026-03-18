@@ -11,6 +11,7 @@ export interface Expense {
   description: string;
   receiptUrl?: string;
   createdAt: number;
+  createdBy: string;
 }
 
 export interface CashIn {
@@ -19,6 +20,7 @@ export interface CashIn {
   amount: number;
   source: string;
   createdAt: number;
+  createdBy: string;
 }
 
 export const DEPARTMENTS: Department[] = [
