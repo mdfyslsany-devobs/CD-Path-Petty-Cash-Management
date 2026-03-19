@@ -33,7 +33,7 @@ import {
   PieChart,
   Pie
 } from 'recharts';
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isSameDay } from 'date-fns';
+import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isSameDay, startOfYear, endOfYear, isSameMonth, isSameYear } from 'date-fns';
 import { DEPARTMENTS, DEFAULT_CATEGORIES, type Expense, type Department, type Category, type CashIn } from './types';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -76,6 +76,7 @@ export default function App() {
 
 function PettyCashApp() {
   const [user, setUser] = useState<User | null>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'accounts_officer' | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [cashIn, setCashIn] = useState<CashIn[]>([]);
@@ -83,6 +84,13 @@ function PettyCashApp() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'daily' | 'entry' | 'add-cash' | 'history' | 'sheets' | 'settings'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDept, setFilterDept] = useState<Department | 'All'>('All');
+  const [historyFilter, setHistoryFilter] = useState<{
+    type: 'all' | 'daily' | 'monthly' | 'yearly';
+    date: string;
+  }>({
+    type: 'all',
+    date: format(new Date(), 'yyyy-MM-dd')
+  });
   const [reportFilter, setReportFilter] = useState<{
     type: 'daily' | 'monthly' | 'yearly';
     date: string;
@@ -101,14 +109,21 @@ function PettyCashApp() {
       if (currentUser) {
         const userDocRef = doc(db, 'users', currentUser.uid);
         const userDoc = await getDoc(userDocRef);
+        let role: 'admin' | 'accounts_officer' = currentUser.email === 'mdfyslsany@gmail.com' ? 'admin' : 'accounts_officer';
+        
         if (!userDoc.exists()) {
           await setDoc(userDocRef, {
             email: currentUser.email,
             displayName: currentUser.displayName,
-            role: currentUser.email === 'mdfyslsany@gmail.com' ? 'admin' : 'accounts_officer',
+            role: role,
             createdAt: Date.now()
           });
+        } else {
+          role = userDoc.data().role;
         }
+        setUserRole(role);
+      } else {
+        setUserRole(null);
       }
     });
     return () => unsubscribe();
@@ -320,24 +335,28 @@ function PettyCashApp() {
             active={activeTab === 'dashboard'} 
             onClick={() => setActiveTab('dashboard')} 
           />
-          <NavItem 
-            icon={<TrendingUp size={20} />} 
-            label="Daily Report" 
-            active={activeTab === 'daily'} 
-            onClick={() => setActiveTab('daily')} 
-          />
+          {userRole === 'admin' && (
+            <NavItem 
+              icon={<TrendingUp size={20} />} 
+              label="Daily Report" 
+              active={activeTab === 'daily'} 
+              onClick={() => setActiveTab('daily')} 
+            />
+          )}
           <NavItem 
             icon={<PlusCircle size={20} />} 
             label="New Expense" 
             active={activeTab === 'entry'} 
             onClick={() => setActiveTab('entry')} 
           />
-          <NavItem 
-            icon={<Wallet size={20} />} 
-            label="Add Cash" 
-            active={activeTab === 'add-cash'} 
-            onClick={() => setActiveTab('add-cash')} 
-          />
+          {userRole === 'admin' && (
+            <NavItem 
+              icon={<Wallet size={20} />} 
+              label="Add Cash" 
+              active={activeTab === 'add-cash'} 
+              onClick={() => setActiveTab('add-cash')} 
+            />
+          )}
           <NavItem 
             icon={<History size={20} />} 
             label="Expense History" 
@@ -347,18 +366,22 @@ function PettyCashApp() {
           <div className="pt-4 pb-2 px-3">
             <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Resources</p>
           </div>
-          <NavItem 
-            icon={<FileSpreadsheet size={20} />} 
-            label="Google Sheets Guide" 
-            active={activeTab === 'sheets'} 
-            onClick={() => setActiveTab('sheets')} 
-          />
-          <NavItem 
-            icon={<Filter size={20} />} 
-            label="Manage Categories" 
-            active={activeTab === 'settings'} 
-            onClick={() => setActiveTab('settings')} 
-          />
+          {userRole === 'admin' && (
+            <>
+              <NavItem 
+                icon={<FileSpreadsheet size={20} />} 
+                label="Google Sheets Guide" 
+                active={activeTab === 'sheets'} 
+                onClick={() => setActiveTab('sheets')} 
+              />
+              <NavItem 
+                icon={<Filter size={20} />} 
+                label="Manage Categories" 
+                active={activeTab === 'settings'} 
+                onClick={() => setActiveTab('settings')} 
+              />
+            </>
+          )}
         </nav>
 
         <div className="p-6 border-t border-slate-100">
@@ -567,22 +590,24 @@ function PettyCashApp() {
                             ৳{entry.amount.toLocaleString()}
                           </td>
                           <td className="px-6 py-4">
-                            <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={() => setEditingCashIn(entry)}
-                                className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                                title="Edit"
-                              >
-                                <PlusCircle size={16} className="rotate-45" />
-                              </button>
-                              <button 
-                                onClick={() => deleteCashIn(entry.id)}
-                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
+                            {userRole === 'admin' && (
+                              <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                  onClick={() => setEditingCashIn(entry)}
+                                  className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                                  title="Edit"
+                                >
+                                  <PlusCircle size={16} className="rotate-45" />
+                                </button>
+                                <button 
+                                  onClick={() => deleteCashIn(entry.id)}
+                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -606,10 +631,39 @@ function PettyCashApp() {
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
-                <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                   <Filter size={18} className="text-slate-400" />
                   <select 
-                    className="flex-1 md:w-48 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none"
+                    className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none"
+                    value={historyFilter.type}
+                    onChange={(e) => setHistoryFilter({ ...historyFilter, type: e.target.value as any })}
+                  >
+                    <option value="all">All Time</option>
+                    <option value="daily">Daily</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                  
+                  {historyFilter.type !== 'all' && (
+                    <input 
+                      type={historyFilter.type === 'daily' ? 'date' : historyFilter.type === 'monthly' ? 'month' : 'number'}
+                      className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none"
+                      value={historyFilter.type === 'yearly' ? historyFilter.date.split('-')[0] : historyFilter.date}
+                      onChange={(e) => {
+                        let newDate = e.target.value;
+                        if (historyFilter.type === 'yearly') {
+                          newDate = `${e.target.value}-01-01`;
+                        } else if (historyFilter.type === 'monthly') {
+                          newDate = `${e.target.value}-01`;
+                        }
+                        setHistoryFilter({ ...historyFilter, date: newDate });
+                      }}
+                      placeholder={historyFilter.type === 'yearly' ? 'Year (e.g. 2025)' : ''}
+                    />
+                  )}
+
+                  <select 
+                    className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none"
                     value={filterDept}
                     onChange={(e) => setFilterDept(e.target.value as any)}
                   >
@@ -638,7 +692,20 @@ function PettyCashApp() {
                           const matchesSearch = e.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
                                                e.category.toLowerCase().includes(searchTerm.toLowerCase());
                           const matchesDept = filterDept === 'All' || e.department === filterDept;
-                          return matchesSearch && matchesDept;
+                          
+                          const expenseDate = parseISO(e.date);
+                          let matchesDate = true;
+                          if (historyFilter.type === 'daily') {
+                            matchesDate = isSameDay(expenseDate, parseISO(historyFilter.date));
+                          } else if (historyFilter.type === 'monthly') {
+                            const filterDate = parseISO(historyFilter.date);
+                            matchesDate = isSameMonth(expenseDate, filterDate);
+                          } else if (historyFilter.type === 'yearly') {
+                            const filterDate = parseISO(historyFilter.date);
+                            matchesDate = isSameYear(expenseDate, filterDate);
+                          }
+                          
+                          return matchesSearch && matchesDept && matchesDate;
                         })
                         .map((expense) => (
                         <tr key={expense.id} className="hover:bg-slate-50 transition-colors group">
@@ -672,13 +739,15 @@ function PettyCashApp() {
                                   <ExternalLink size={16} />
                                 </a>
                               )}
-                              <button 
-                                onClick={() => deleteExpense(expense.id)}
-                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete"
-                              >
-                                <Trash2 size={16} />
-                              </button>
+                              {userRole === 'admin' && (
+                                <button 
+                                  onClick={() => deleteExpense(expense.id)}
+                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
