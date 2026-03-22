@@ -79,6 +79,7 @@ function PettyCashApp() {
   const [userRole, setUserRole] = useState<'admin' | 'accounts_officer' | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [cashIn, setCashIn] = useState<CashIn[]>([]);
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'daily' | 'entry' | 'add-cash' | 'history' | 'sheets' | 'settings'>('dashboard');
@@ -160,6 +161,9 @@ function PettyCashApp() {
       }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'categories'));
 
+    // Initial fetch from backend API
+    fetchExpenses();
+
     return () => {
       unsubExpenses();
       unsubCashIn();
@@ -167,17 +171,54 @@ function PettyCashApp() {
     };
   }, [user, isAuthReady]);
 
+  const fetchExpenses = async () => {
+    try {
+      const response = await fetch('/api/expenses');
+      if (response.ok) {
+        const data = await response.json();
+        setExpenses(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch expenses from backend:', error);
+    }
+  };
+
   const addExpense = async (expense: Omit<Expense, 'id' | 'createdAt' | 'createdBy'>) => {
     if (!user) return;
+    setIsSyncing(true);
     try {
-      await addDoc(collection(db, 'expenses'), {
-        ...expense,
-        createdAt: Date.now(),
-        createdBy: user.uid
+      // Call our new backend API instead of direct Firestore
+      const response = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...expense,
+          createdBy: user.uid
+        }),
       });
-      setActiveTab('history');
+
+      if (response.ok) {
+        // Refresh local list from backend
+        await fetchExpenses();
+        setActiveTab('history');
+      } else {
+        throw new Error('Failed to save expense via API');
+      }
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'expenses');
+      console.error('Error saving expense:', error);
+      // Fallback to direct Firestore if API fails (optional, but good for robustness)
+      try {
+        await addDoc(collection(db, 'expenses'), {
+          ...expense,
+          createdAt: Date.now(),
+          createdBy: user.uid
+        });
+        setActiveTab('history');
+      } catch (fsError) {
+        handleFirestoreError(fsError, OperationType.CREATE, 'expenses');
+      }
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -544,6 +585,7 @@ function PettyCashApp() {
                   onSubmit={addExpense} 
                   categories={categories} 
                   onAddCategory={addCategory}
+                  isSyncing={isSyncing}
                 />
               </div>
             </div>
@@ -818,10 +860,11 @@ function StatCard({ label, value, icon, trend, highlight }: { label: string, val
   );
 }
 
-function ExpenseForm({ onSubmit, categories, onAddCategory }: { 
+function ExpenseForm({ onSubmit, categories, onAddCategory, isSyncing }: { 
   onSubmit: (expense: Omit<Expense, 'id' | 'createdAt' | 'createdBy'>) => void, 
   categories: Category[],
-  onAddCategory: (name: string) => Promise<void>
+  onAddCategory: (name: string) => Promise<void>,
+  isSyncing?: boolean
 }) {
   const [formData, setFormData] = useState({
     date: format(new Date(), 'yyyy-MM-dd'),
@@ -960,10 +1003,11 @@ function ExpenseForm({ onSubmit, categories, onAddCategory }: {
       </div>
       <button 
         type="submit"
-        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-emerald-100 flex items-center justify-center gap-2"
+        disabled={isSyncing}
+        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-emerald-100 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <PlusCircle size={20} />
-        Record Transaction
+        <PlusCircle size={20} className={cn(isSyncing && "animate-spin")} />
+        {isSyncing ? 'Saving Expense...' : 'Record Transaction'}
       </button>
     </form>
   );
