@@ -34,9 +34,22 @@ export const DEPARTMENTS: Department[] = [
 
 export const DEFAULT_CATEGORIES: Category[] = [
   'Medical Supplies',
+  'Laboratory Reagents',
+  'Cleaning Supplies',
   'Stationaries',
+  'Office Supplies',
   'Maintenance',
+  'Repairs & Maintenance',
   'Emergency Staff Refreshments',
   'Utilities',
+  'IT Support & Software',
+  'Laundry Services',
+  'Waste Management',
+  'Patient Food & Nutrition',
+  'Travel & Transport',
+  'Printing & Photocopying',
+  'Uniforms & Apparel',
+  'Security Services',
+  'Postage & Courier',
   'Miscellaneous'
 ];
